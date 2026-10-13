@@ -172,6 +172,21 @@
   <!-- 알림 토스트 영역 -->
   <div id="toastContainer" class="toast-container"></div>
 
+  <!-- [추가된 영역] 자동 폴더 연결 권한 팝업 모달 -->
+  <div id="permissionModal" class="modal-overlay" style="display: none;">
+    <div class="modal-content">
+      <h3 style="margin-bottom:10px;">이전 작업 폴더 연결</h3>
+      <p style="font-size:13px; color:var(--text-secondary); margin-bottom:20px;">
+        마지막으로 작업했던 <b id="lastFolderName" style="color:var(--text-primary);">Card</b> 폴더의 접근 권한을 복구하시겠습니까?<br>
+        (브라우저 상단의 '변경 내용 저장' 권한 허용이 필요할 수 있습니다)
+      </p>
+      <div style="display:flex; justify-content:flex-end; gap:8px;">
+        <button class="btn" onclick="closePermissionModal()">취소</button>
+        <button class="btn btn-primary" onclick="restoreFolderConnection()">권한 복구 및 연결</button>
+      </div>
+    </div>
+  </div>
+  
   <script src="app.js"></script>
 </body>
 </html>
