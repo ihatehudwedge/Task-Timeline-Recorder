@@ -33,12 +33,12 @@ let searchTimer = null;
 // ============================================================================
 const DB_NAME = "TimelineAppDB";
 const STORE_HANDLES = "folder_handles";
-const STORE_CARDS_CACHE = "cards_meta_cache"; // 파일 증분 동기화용 캐시
-const STORE_FALLBACK = "fallback_cache";      // 공유 폴더 미연결 시 로컬 저장소 (5MB 제한 없음)
+const STORE_CARDS_CACHE = "cards_meta_cache"; 
+const STORE_FALLBACK = "fallback_cache";      
 
 async function initDB() {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 2);
+    const request = indexedDB.open(DB_NAME, 3); // DB 버전 업그레이드
     request.onupgradeneeded = (e) => {
       const db = e.target.result;
       if (!db.objectStoreNames.contains(STORE_HANDLES)) db.createObjectStore(STORE_HANDLES);
@@ -54,9 +54,9 @@ async function initDB() {
 
 window.addEventListener("DOMContentLoaded", async () => {
   renderTemplateChips();
-  await loadFallbackData(); // 공유 폴더 미연결 상태일 때 볼 임시 데이터 로드
-  renderBoard(true);
-  await checkSavedFolderOnLoad(); // 권한 복구 및 폴더 스캔
+  await loadFallbackData(); 
+  renderBoard(); 
+  await checkSavedFolderOnLoad(); 
 });
 
 // ============================================================================
@@ -66,7 +66,6 @@ async function loadAllCardsFromDirectory() {
   if (!directoryHandle) return;
   const db = await initDB();
 
-  // 기존에 읽어뒀던 1만개 파일의 날짜 및 데이터를 캐시(Map)로 불러옴
   const cachedMap = new Map();
   await new Promise(resolve => {
     const tx = db.transaction(STORE_CARDS_CACHE, "readonly");
@@ -75,12 +74,12 @@ async function loadAllCardsFromDirectory() {
       req.result.forEach(item => cachedMap.set(item.fileName, item));
       resolve();
     };
+    req.onerror = () => resolve();
   });
 
   const currentFileNames = new Set();
   let updatedCount = 0;
 
-  // 디스크 파일들의 날짜(lastModified)만 광속 스캔
   for await (const entry of directoryHandle.values()) {
     if (entry.kind === "file" && (entry.name.endsWith(".json") || entry.name.endsWith(".card"))) {
       currentFileNames.add(entry.name);
@@ -89,7 +88,6 @@ async function loadAllCardsFromDirectory() {
 
       const cached = cachedMap.get(entry.name);
       
-      // 날짜가 바뀌었거나(최신), 캐시에 없는 새 파일일 때만 내용을 읽어옴
       if (!cached || cached.lastModified !== lastModified) {
         try {
           const text = await file.text();
@@ -117,27 +115,24 @@ async function loadAllCardsFromDirectory() {
     }
   }
 
-  // 폴더에서 삭제된 파일 캐시 정리
   for (const fileName of cachedMap.keys()) {
     if (!currentFileNames.has(fileName)) cachedMap.delete(fileName);
   }
 
-  // 캐시 DB 저장 (Bulk)
   const tx = db.transaction(STORE_CARDS_CACHE, "readwrite");
   const store = tx.objectStore(STORE_CARDS_CACHE);
   store.clear();
   cachedMap.forEach(item => store.put(item));
   
-  // 메모리 반영 및 최신순 정렬
   const loadedCards = [];
   cachedMap.forEach(item => loadedCards.push(...item.data));
   loadedCards.sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
   appData.cards = loadedCards;
 
-  if (updatedCount > 0) console.log(`${updatedCount}개 파일 업데이트(스캔) 완료`);
+  if (updatedCount > 0) console.log(`${updatedCount}개 파일 업데이트 완료`);
   
-  await saveFallbackData(); // 안전 장치
-  renderBoard(true);
+  await saveFallbackData(); 
+  renderBoard();
 }
 
 // ============================================================================
@@ -146,30 +141,38 @@ async function loadAllCardsFromDirectory() {
 function handleSearchInput() {
   if (searchTimer) clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
-    renderBoard(true); // 입력 멈추고 0.3초 후 1번만 렌더링
+    renderBoard(); // 아무 인자 없이 호출 시 무조건 화면을 리셋함
   }, 300);
 }
 
-function renderBoard(resetPage = false) {
+// isLoadMore가 명시적으로 true일 때만 하단에 이어붙이고, 나머지는 무조건 화면 초기화
+function renderBoard(isLoadMore = false) {
   updateWorkerDropdown();
 
-  if (resetPage) currentPage = 1;
+  const grid = document.getElementById("cardsGrid");
+  
+  if (isLoadMore !== true) {
+    currentPage = 1;
+    grid.innerHTML = "";
+  }
 
-  const query = document.getElementById("searchInput").value.trim().toLowerCase();
-  const selectedWorker = document.getElementById("workerFilterSelect").value;
+  const query = document.getElementById("searchInput")?.value.trim().toLowerCase() || "";
+  const selectedWorker = document.getElementById("workerFilterSelect")?.value || "ALL";
 
   const counts = { ALL: appData.cards.length, "대기": 0, "진행": 0, "이슈발생": 0, "종료": 0 };
   appData.cards.forEach(c => { if (counts[c.status] !== undefined) counts[c.status]++; });
 
-  document.getElementById("summaryCounts").innerHTML = `
-    <span>전체 카드 <b>${counts.ALL}</b></span>
-    <span>대기 <b>${counts["대기"]}</b></span>
-    <span style="color:var(--status-prog-text)">진행 <b>${counts["진행"]}</b></span>
-    <span style="color:var(--status-issue-text)">이슈발생 <b>${counts["이슈발생"]}</b></span>
-    <span style="color:var(--status-done-text)">종료 <b>${counts["종료"]}</b></span>
-  `;
+  const summaryEl = document.getElementById("summaryCounts");
+  if (summaryEl) {
+    summaryEl.innerHTML = `
+      <span>전체 카드 <b>${counts.ALL}</b></span>
+      <span>대기 <b>${counts["대기"]}</b></span>
+      <span style="color:var(--status-prog-text)">진행 <b>${counts["진행"]}</b></span>
+      <span style="color:var(--status-issue-text)">이슈발생 <b>${counts["이슈발생"]}</b></span>
+      <span style="color:var(--status-done-text)">종료 <b>${counts["종료"]}</b></span>
+    `;
+  }
 
-  // 1만개 메모리 통합 검색 (매우 빠름)
   const filtered = appData.cards.filter(card => {
     if (currentFilterStatus !== "ALL" && card.status !== currentFilterStatus) return false;
     if (selectedWorker !== "ALL" && (card.worker || "").trim() !== selectedWorker) return false;
@@ -186,19 +189,15 @@ function renderBoard(resetPage = false) {
     return true;
   });
 
-  const grid = document.getElementById("cardsGrid");
-  if (resetPage) grid.innerHTML = ""; // 페이지 초기화 시에만 DOM 삭제
-
   if (filtered.length === 0) {
     grid.innerHTML = `
-      <div class="empty-board" style="grid-column: 1 / -1; break-inside: avoid;">
+      <div class="empty-board" style="column-span: all; break-inside: avoid;">
         <p style="font-size:15px; font-weight:700; margin-bottom:6px;">등록된 작업 카드가 없습니다.</p>
       </div>
     `;
     return;
   }
 
-  // 과부하 방지: 30개씩 분할 렌더링
   const startIndex = (currentPage - 1) * CARDS_PER_PAGE;
   const endIndex = startIndex + CARDS_PER_PAGE;
   const pageCards = filtered.slice(startIndex, endIndex);
@@ -226,7 +225,6 @@ function renderBoard(resetPage = false) {
     grid.appendChild(cardEl);
   });
 
-  // '더보기' 버튼 처리
   let loadMoreBtn = document.getElementById("loadMoreBtn");
   if (loadMoreBtn) loadMoreBtn.remove();
   if (endIndex < filtered.length) {
@@ -234,8 +232,8 @@ function renderBoard(resetPage = false) {
     loadMoreBtn.id = "loadMoreBtn";
     loadMoreBtn.className = "btn";
     loadMoreBtn.textContent = `더보기 (${filtered.length - endIndex}개 남음) ▼`;
-    loadMoreBtn.style.cssText = "width: 100%; grid-column: 1 / -1; break-inside: avoid; padding: 12px; margin-top: 10px;";
-    loadMoreBtn.onclick = () => { currentPage++; renderBoard(false); };
+    loadMoreBtn.style.cssText = "width: 100%; column-span: all; break-inside: avoid; padding: 12px; margin-top: 10px;";
+    loadMoreBtn.onclick = () => { currentPage++; renderBoard(true); };
     grid.appendChild(loadMoreBtn);
   }
 }
@@ -245,17 +243,24 @@ function setStatusFilter(status) {
   document.querySelectorAll("#statusFilterGroup .filter-pill").forEach(btn => {
     btn.classList.toggle("active", btn.getAttribute("data-filter") === status);
   });
-  renderBoard(true);
+  renderBoard();
 }
 
 function updateWorkerDropdown() {
   const select = document.getElementById("workerFilterSelect");
+  if (!select) return;
   const prevValue = select.value;
   const workers = new Set();
   appData.cards.forEach(c => { if (c.worker && c.worker.trim()) workers.add(c.worker.trim()); });
-  select.innerHTML = `<option value="ALL">모든 작업자 (${workers.size}명)</option>`;
-  Array.from(workers).sort().forEach(w => { select.innerHTML += `<option value="${w}">작업자: ${w}</option>`; });
-  select.value = [...workers].includes(prevValue) ? prevValue : "ALL";
+  
+  const sortedWorkers = Array.from(workers).sort();
+  const newHtml = `<option value="ALL">모든 작업자 (${workers.size}명)</option>` + 
+                  sortedWorkers.map(w => `<option value="${escapeHtml(w)}">작업자: ${escapeHtml(w)}</option>`).join("");
+  
+  if (select.innerHTML !== newHtml) {
+    select.innerHTML = newHtml;
+    select.value = sortedWorkers.includes(prevValue) ? prevValue : "ALL";
+  }
 }
 
 // ============================================================================
@@ -289,7 +294,6 @@ async function saveSingleCardFileToDirectory(cardObj, customToastMsg = null) {
       }
     } catch (e) { /* 새 파일 */ }
 
-    // Atomic Write
     const fileData = JSON.stringify(finalCard, null, 2);
     const tmpFileName = fileName + ".tmp";
     const tmpHandle = await directoryHandle.getFileHandle(tmpFileName, { create: true });
@@ -315,7 +319,7 @@ async function deleteSingleCardFileFromDirectory(cardId) {
   if (!directoryHandle) {
     appData.cards = appData.cards.filter(c => c.id !== cardId);
     await saveFallbackData();
-    renderBoard(true);
+    renderBoard();
     showToast(`카드(${cardId})가 삭제되었습니다.`, "success");
     return;
   }
@@ -336,7 +340,7 @@ async function deleteSingleCardFileFromDirectory(cardId) {
     }
     appData.cards = appData.cards.filter(c => c.id !== cardId);
     await saveFallbackData();
-    renderBoard(true);
+    renderBoard();
   } catch (err) {
     showToast(`삭제 중 오류: ` + err.message, "warn");
   }
@@ -363,14 +367,14 @@ async function getNextTaskNumber() {
 
 function updateMemoryCacheAndRender(finalCard) {
   const idx = appData.cards.findIndex(c => c.id === finalCard.id);
-  if (idx !== -1) appData.cards[idx] = finalCard;
-  else appData.cards.unshift(finalCard);
+  if (idx !== -1) appData.cards.splice(idx, 1);
+  appData.cards.unshift(finalCard);
   saveFallbackData();
-  renderBoard(true);
+  renderBoard();
 }
 
 // ============================================================================
-// 4. 폴백 데이터 (IndexedDB 5MB 이상 캐시) 및 폴더 연결 관리
+// 4. 폴백 데이터 및 공유 폴더 연결 관리
 // ============================================================================
 async function saveFallbackData() {
   const db = await initDB();
@@ -384,7 +388,18 @@ async function loadFallbackData() {
     const tx = db.transaction(STORE_FALLBACK, "readonly");
     const req = tx.objectStore(STORE_FALLBACK).get("fallback_data");
     req.onsuccess = () => {
-      if (req.result && Array.isArray(req.result.cards)) appData.cards = req.result.cards;
+      if (req.result && Array.isArray(req.result.cards)) {
+        appData.cards = req.result.cards;
+      } else {
+        // 기존 localStorage 마이그레이션 (데이터 유실 방지)
+        const oldData = localStorage.getItem("TASK_TIMELINE_FRAGMENTED_CACHE_V2");
+        if (oldData) {
+          try {
+            const parsed = JSON.parse(oldData);
+            if (parsed && Array.isArray(parsed.cards)) appData.cards = parsed.cards;
+          } catch(e) {}
+        }
+      }
       resolve();
     };
     req.onerror = () => resolve();
