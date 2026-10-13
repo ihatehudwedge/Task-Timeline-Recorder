@@ -257,6 +257,7 @@ async function saveSingleCardFileToDirectory(cardObj, customToastMsg = null) {
   }
 }
 
+// [수정] 카드 삭제 시 완전 삭제 대신 .erase 확장자로 변경하여 백업 (소프트 삭제)
 async function deleteSingleCardFileFromDirectory(cardId) {
   if (!directoryHandle) {
     saveToLocalCache();
@@ -267,14 +268,36 @@ async function deleteSingleCardFileFromDirectory(cardId) {
 
   try {
     const fileName = getCardFileName(cardId);
-    await directoryHandle.removeEntry(fileName);
+    const eraseFileName = fileName + ".erase";
+
+    try {
+      // 1. 기존 원본 파일(.json) 내용 읽어오기
+      const existingFileHandle = await directoryHandle.getFileHandle(fileName, { create: false });
+      const file = await existingFileHandle.getFile();
+      const fileData = await file.text();
+
+      // 2. 내용물을 .json.erase 라는 새 확장자 파일로 복사하여 안전하게 기록
+      const eraseFileHandle = await directoryHandle.getFileHandle(eraseFileName, { create: true });
+      const writable = await eraseFileHandle.createWritable();
+      await writable.write(fileData);
+      await writable.close();
+
+      // 3. 복사가 완료되면 기존 원본 파일(.json)을 지워서 보드에서 숨김 처리
+      await directoryHandle.removeEntry(fileName);
+
+      showToast(`공유 폴더에서 카드 파일이 삭제 처리(.erase 보존) 되었습니다.`, "success");
+    } catch (fileErr) {
+      console.warn("삭제할 원본 파일을 찾을 수 없습니다:", fileErr);
+      showToast(`파일을 찾을 수 없어 목록에서만 삭제되었습니다.`, "success");
+    }
+
     saveToLocalCache();
     renderBoard();
-    showToast(`공유 폴더에서 카드 파일(${fileName})이 삭제되었습니다.`, "success");
   } catch (err) {
+    console.error(err);
     saveToLocalCache();
     renderBoard();
-    showToast(`카드 목록에서 삭제되었습니다.`, "success");
+    showToast(`카드 삭제 중 오류 발생: ` + err.message, "warn");
   }
 }
 
@@ -684,7 +707,7 @@ async function saveCardAndSync() {
       appData.cards.unshift(targetCard);
     }
   } else {
-    const nextNum = getNextTaskNumber();
+    const nextNum = await getNextTaskNumber();
     targetCard = {
       id: `TASK-${nextNum}`,
       title,
@@ -713,8 +736,11 @@ async function deleteCurrentCard() {
   closeDrawer();
 }
 
-function getNextTaskNumber() {
+// [수정] .erase 등 숨겨진 파일을 포함하여 실제 디스크 기반 최댓값 채번
+async function getNextTaskNumber() {
   let max = 100;
+
+  // 1. 현재 화면(메모리)에 로드된 카드 번호 검사
   appData.cards.forEach(c => {
     const match = String(c.id).match(/TASK-(\d+)/);
     if (match) {
@@ -722,6 +748,25 @@ function getNextTaskNumber() {
       if (num > max) max = num;
     }
   });
+
+  // 2. 공유 폴더가 연결되어 있다면, 파일명 자체를 스캔 (.erase 파일 포함)
+  if (directoryHandle) {
+    try {
+      for await (const entry of directoryHandle.values()) {
+        if (entry.kind === "file") {
+          // 확장자에 상관없이 파일명에 "TASK-숫자"가 있으면 모두 추출
+          const match = entry.name.match(/TASK-(\d+)/);
+          if (match) {
+            const num = parseInt(match[1], 10);
+            if (num > max) max = num;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("디스크 파일 스캔 중 오류 발생:", e);
+    }
+  }
+
   return max + 1;
 }
 
