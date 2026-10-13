@@ -35,6 +35,7 @@ window.addEventListener("DOMContentLoaded", () => {
   renderTemplateChips();
   loadInitialData();
   renderBoard();
+  await checkSavedFolderOnLoad();
 });
 
 // 1. 템플릿 칩 버튼 생성
@@ -109,6 +110,9 @@ async function connectCardDirectory() {
       mode: "readwrite"
     });
     directoryHandle = dirHandle;
+    
+    await saveFolderHandle(dirHandle); // <- 새로 추가된 줄: 권한 획득 후 IndexedDB에 저장
+    
     await loadAllCardsFromDirectory();
     updateFolderStatusUI(dirHandle.name);
     showToast(`'${dirHandle.name}' 카드 폴더가 연결되었습니다.`, "success");
@@ -720,4 +724,90 @@ function showToast(msg, type = "info") {
     toast.style.transition = "opacity 0.25s";
     setTimeout(() => toast.remove(), 250);
   }, 2800);
+}
+
+/* ============================================================================
+ * [추가] IndexedDB를 이용한 폴더 권한 핸들(Handle) 기억 및 자동 복구 로직
+ * ============================================================================ */
+const DB_NAME = "TimelineAppDB";
+const STORE_NAME = "folder_handles";
+
+async function initDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 1);
+    request.onupgradeneeded = (e) => {
+      e.target.result.createObjectStore(STORE_NAME);
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function saveFolderHandle(handle) {
+  const db = await initDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    tx.objectStore(STORE_NAME).put(handle, "lastFolderHandle");
+    tx.oncomplete = () => resolve();
+  });
+}
+
+async function getFolderHandle() {
+  const db = await initDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const req = tx.objectStore(STORE_NAME).get("lastFolderHandle");
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => resolve(null);
+  });
+}
+
+async function verifyPermission(fileHandle, readWrite) {
+  const options = {};
+  if (readWrite) options.mode = 'readwrite';
+  if ((await fileHandle.queryPermission(options)) === 'granted') return true;
+  if ((await fileHandle.requestPermission(options)) === 'granted') return true;
+  return false;
+}
+
+async function checkSavedFolderOnLoad() {
+  try {
+    const handle = await getFolderHandle();
+    if (handle) {
+      // 저장된 폴더 핸들이 있으면 팝업을 띄움
+      document.getElementById("lastFolderName").textContent = `'${handle.name}'`;
+      document.getElementById("permissionModal").style.display = "flex";
+    }
+  } catch (e) {
+    console.error("저장된 폴더 정보를 불러오지 못했습니다.", e);
+  }
+}
+
+function closePermissionModal() {
+  document.getElementById("permissionModal").style.display = "none";
+}
+
+async function restoreFolderConnection() {
+  try {
+    const handle = await getFolderHandle();
+    if (!handle) {
+      closePermissionModal();
+      return;
+    }
+    
+    // 네이티브 브라우저 권한 요청 띄우기 (탐색기 오픈 없이 권한만 요청)
+    const isGranted = await verifyPermission(handle, true);
+    if (isGranted) {
+      directoryHandle = handle;
+      await loadAllCardsFromDirectory();
+      updateFolderStatusUI(handle.name);
+      showToast(`'${handle.name}' 폴더가 다시 연결되었습니다.`, "success");
+    } else {
+      showToast("권한이 거부되었습니다. [공유 폴더 연결] 버튼을 다시 눌러주세요.", "warn");
+    }
+  } catch (e) {
+    showToast("폴더 복구 중 오류 발생: " + e.message, "warn");
+  } finally {
+    closePermissionModal();
+  }
 }
