@@ -31,7 +31,7 @@ let removedTimelineIdsInSession = new Set();
 const LOCAL_STORAGE_KEY = "TASK_TIMELINE_FRAGMENTED_CACHE_V2";
 
 // 초기 구동
-window.addEventListener("DOMContentLoaded", () => {
+window.addEventListener("DOMContentLoaded", async () => {
   renderTemplateChips();
   loadInitialData();
   renderBoard();
