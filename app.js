@@ -175,7 +175,7 @@ async function reloadCardsFromDirectory() {
 }
 
 /**
- * [핵심] 특정 카드 1개만 개별 파일로 저장 및 병합
+ * [핵심] 특정 카드 1개만 개별 파일로 저장 및 병합 + 안전한 파일 쓰기(Atomic Write)
  */
 async function saveSingleCardFileToDirectory(cardObj, customToastMsg = null) {
   if (!directoryHandle) {
@@ -189,13 +189,15 @@ async function saveSingleCardFileToDirectory(cardObj, customToastMsg = null) {
     const fileName = getCardFileName(cardObj.id);
     let finalCard = { ...cardObj };
 
-    // 기존에 해당 카드 파일이 폴더에 있는지 확인하여 타임라인 병합
+    // 1. 기존에 해당 카드 파일이 폴더에 있는지 확인하여 타임라인 병합
     try {
       const existingFileHandle = await directoryHandle.getFileHandle(fileName, { create: false });
       const existingFile = await existingFileHandle.getFile();
       const existingText = await existingFile.text();
       if (existingText.trim()) {
         const diskCard = JSON.parse(existingText);
+        
+        // 타임라인 병합 (동시 수정 충돌 방지)
         if (diskCard && Array.isArray(diskCard.timeline)) {
           const mergedMap = new Map();
           (cardObj.timeline || []).forEach(tl => mergedMap.set(tl.id, tl));
@@ -210,14 +212,35 @@ async function saveSingleCardFileToDirectory(cardObj, customToastMsg = null) {
         }
       }
     } catch (notFoundErr) {
-      // 신규 카드 파일인 경우 패스
+      // 신규 카드 파일인 경우 (병합할 내용 없음)
     }
 
+    const fileData = JSON.stringify(finalCard, null, 2);
+    const tmpFileName = fileName + ".tmp";
+
+    // --- [추가] 안전한 파일 쓰기 (Atomic Write / 백업 패턴) ---
+    
+    // 단계 A: 임시 파일(.tmp)에 새로운 데이터를 먼저 완전히 기록
+    const tmpFileHandle = await directoryHandle.getFileHandle(tmpFileName, { create: true });
+    const tmpWritable = await tmpFileHandle.createWritable();
+    await tmpWritable.write(fileData);
+    await tmpWritable.close(); // 여기서 디스크 쓰기 1차 완료 (안전 확보)
+
+    // 단계 B: 임시 파일 기록이 성공했을 때만 원본 파일(.json) 덮어쓰기 진행
     const fileHandle = await directoryHandle.getFileHandle(fileName, { create: true });
     const writable = await fileHandle.createWritable();
-    await writable.write(JSON.stringify(finalCard, null, 2));
-    await writable.close();
+    await writable.write(fileData);
+    await writable.close(); // 디스크 쓰기 2차 완료
 
+    // 단계 C: 원본 파일 저장이 무사히 끝났다면 임시 파일(.tmp) 삭제
+    try {
+      await directoryHandle.removeEntry(tmpFileName);
+    } catch (removeErr) {
+      console.warn("임시 파일 삭제 실패 (무시됨):", removeErr);
+    }
+    // -------------------------------------------------------------
+
+    // 메모리 상태 업데이트
     const idx = appData.cards.findIndex(c => c.id === finalCard.id);
     if (idx !== -1) {
       appData.cards[idx] = finalCard;
@@ -227,7 +250,7 @@ async function saveSingleCardFileToDirectory(cardObj, customToastMsg = null) {
 
     saveToLocalCache();
     renderBoard();
-    showToast(customToastMsg || `카드 파일(${fileName})이 공유 폴더에 저장되었습니다.`, "success");
+    showToast(customToastMsg || `카드 파일(${fileName})이 공유 폴더에 안전하게 저장되었습니다.`, "success");
   } catch (err) {
     console.error(err);
     showToast("카드 파일 저장 중 오류 발생: " + err.message, "warn");
