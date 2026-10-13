@@ -595,14 +595,21 @@ header {
 }
 
 .cards-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-  gap: 18px;
-  align-items: start;
+  /* --- [삭제] 기존 행 기반 그리드 속성 --- */
+  /* display: grid; */
+  /* grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); */
+  /* gap: 18px; */
+  /* align-items: start; */
+
+  /* --- [추가] 빈 공간 없이 채우는 다단(Masonry) 레이아웃 --- */
+  column-width: 380px;  /* 카드의 기본 너비 (화면이 넓어지면 자동으로 단수가 늘어남) */
+  column-gap: 18px;     /* 좌우 카드 사이의 여백 */
+  width: 100%;
 }
 
 /* Task Card */
 .task-card {
+  /* --- 기존 스타일 유지 --- */
   background-color: var(--bg-card);
   border: 1px solid var(--border-color);
   border-left-width: 4px;
@@ -612,6 +619,13 @@ header {
   flex-direction: column;
   gap: 12px;
   transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+
+  /* --- [추가] 핀터레스트 스타일 구현을 위한 방어 코드 --- */
+  break-inside: avoid;        /* 카드가 열(Column) 중간에 잘려서 다음 단으로 넘어가는 것 방지 */
+  page-break-inside: avoid;   /* 구형 브라우저 호환성 */
+  margin-bottom: 18px;        /* 상하 카드 사이의 여백 (기존 gap을 대체) */
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .task-card:hover {
